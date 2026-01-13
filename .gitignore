@@ -1,0 +1,21 @@
+﻿# R
+.Rhistory
+.RData
+.Ruserdata
+
+# RStudio
+.Rproj.user/
+.Rproj
+
+# Environment
+.Renviron
+
+# macOS
+.DS_Store
+
+# rsconnect deployment metadata / secrets
+rsconnect/
+
+# logs
+logs/
+*.log
