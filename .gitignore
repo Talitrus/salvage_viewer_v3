@@ -1,4 +1,4 @@
-﻿# R
+# R
 .Rhistory
 .RData
 .Ruserdata
@@ -19,3 +19,9 @@ rsconnect/
 # logs
 logs/
 *.log
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# Backups
+data/CFS_data_bak.csv

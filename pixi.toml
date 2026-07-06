@@ -1,0 +1,17 @@
+[workspace]
+authors = ["Bryan <9120001+Talitrus@users.noreply.github.com>"]
+channels = ["conda-forge"]
+name = "salvage_viewer_v3"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+start = "Rscript app.R"
+
+[dependencies]
+r-base = ">=4.5.3,<4.6"
+r-shiny = ">=1.14.0,<2"
+r-tidyverse = ">=2.0.0,<3"
+r-readxl = ">=1.5.0,<2"
+r-plotly = ">=4.12.0,<5"
+r-rcolorbrewer = ">=1.1_3,<2"
