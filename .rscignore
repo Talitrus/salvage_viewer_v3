@@ -1,0 +1,5 @@
+.pixi
+.Rhistory
+.Renviron
+env
+pixi.lock
