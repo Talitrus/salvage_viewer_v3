@@ -115,8 +115,9 @@ server <- function(input, output, session) {
       ) %>%
       left_join(pbt_summary, by = c("ID" = "D2_indiv")) %>%
       mutate(
-        PBT = !is.na(PBT_info),
-        PBT_info = ifelse(PBT, PBT_info, "No PBT match"),
+        has_pbt_match = !is.na(PBT_info),
+        PBT_info = ifelse(has_pbt_match, PBT_info, "No PBT match"),
+        PBT = ifelse(has_pbt_match, Genetic_Assignment, "FALSE"),
         tooltip_text = paste0(
           "<b>ID:</b> ", ID, "<br>",
           "<b>Date:</b> ", ifelse(is.na(SampleDate), "N/A", format(SampleDate, "%Y-%m-%d %H:%M")), "<br>",
@@ -125,8 +126,8 @@ server <- function(input, output, session) {
           "<b>Genetic Assignment:</b> ", ifelse(is.na(Genetic_Assignment), "N/A", Genetic_Assignment), "<br>",
           "<b>Sherlock Assignment:</b> ", ifelse(is.na(Sherlock_Assignment), "N/A", Sherlock_Assignment), "<br>",
           "<b>Facility:</b> ", ifelse(is.na(Facility), "N/A", Facility), "<br>",
-          "<b>PBT Match:</b> ", ifelse(PBT, "TRUE", "FALSE"),
-          ifelse(PBT, paste0("<br><br><b>PBT Matches:</b><br>", PBT_info), "")
+          "<b>PBT Match:</b> ", ifelse(has_pbt_match, "TRUE", "FALSE"),
+          ifelse(has_pbt_match, paste0("<br><br><b>PBT Matches:</b><br>", PBT_info), "")
         )
       )
     if (length(input$selectIDs) < 1) {
