@@ -44,15 +44,21 @@ server <- function(input, output, session) {
   # Read in static PBT data
   pbt_files <- list.files("data/PBT_results", pattern = "\\.tsv$", full.names = TRUE)
   if (length(pbt_files) > 0) {
-    pbt_raw <- purrr::map_dfr(pbt_files, read_tsv, col_types = cols(
-      D2_indiv = col_character(),
-      D1_indiv = col_character(),
-      logl_ratio = col_double(),
-      num_loc = col_integer(),
-      total_incompat = col_integer(),
-      total_compat = col_integer(),
-      fraction_incompat = col_double()
-    ))
+    pbt_raw <- purrr::map_dfr(
+      pbt_files,
+      read_tsv,
+      col_types = cols(
+        D2_indiv = col_character(),
+        D1_indiv = col_character(),
+        logl_ratio = col_double(),
+        num_loc = col_integer(),
+        total_incompat = col_integer(),
+        total_compat = col_integer(),
+        fraction_incompat = col_double()
+      ),
+      .id = "Source_path"
+    ) %>%
+      mutate(Source = tools::file_path_sans_ext(basename(pbt_files[as.integer(Source_path)])))
 
     pbt_summary <- pbt_raw %>%
       filter(!is.na(D2_indiv), D2_indiv != "") %>%
@@ -60,6 +66,7 @@ server <- function(input, output, session) {
         logl_ratio_num = round(as.numeric(logl_ratio), 2),
         match_desc = paste0(
           "• Candidate Parent: <b>", D1_indiv, "</b><br>",
+          "  Source: ", Source, "<br>",
           "  LogL Ratio: ", logl_ratio_num, "<br>",
           "  Loci (Compat/Total): ", total_compat, "/", num_loc, " (", total_incompat, " incompat)"
         )
