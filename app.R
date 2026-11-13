@@ -28,6 +28,34 @@ get_available_water_years <- function(data_dir = "data") {
   sort(wy_dirs, decreasing = TRUE)
 }
 
+# Return start (Oct 1 of WY - 1) and end (Sep 30 of WY) dates for a water year string (e.g., "WY2027")
+get_water_year_bounds <- function(water_year) {
+  wy_num <- as.integer(sub("^WY", "", water_year))
+  list(
+    wy_num = wy_num,
+    start  = as.Date(sprintf("%04d-10-01", wy_num - 1)),
+    end    = as.Date(sprintf("%04d-09-30", wy_num))
+  )
+}
+
+# Dynamically generate daily Length-at-Date (LAD) ribbon data for any date range
+# from the year-agnostic template (`data/lad_template.tsv`)
+generate_lad_data <- function(start_date, end_date, lad_template) {
+  dates_df <- tibble(date = seq.Date(as.Date(start_date), as.Date(end_date), by = "day")) %>%
+    mutate(
+      year  = lubridate::year(date),
+      month = lubridate::month(date),
+      day   = lubridate::mday(date)
+    )
+
+  dates_df %>%
+    inner_join(lad_template, by = c("month", "day"), relationship = "many-to-many") %>%
+    mutate(
+      cohort = paste0(run, sprintf("%02d", (year + brood_year_offset) %% 100))
+    ) %>%
+    select(month, day, year, date, run, cohort, max, min)
+}
+
 # Load and summarize PBT results for a given water year
 load_pbt_summary <- function(water_year, data_dir = "data") {
   pbt_dir <- file.path(data_dir, water_year, "PBT_results")
@@ -212,9 +240,19 @@ ui <- fluidPage(
 
 # Define server logic
 server <- function(input, output, session) {
-  # Read in static LAD data
-  tsv_files <- list.files("data", pattern = "^lad_long.*\\.txt$", full.names = TRUE)
-  lad_long <- purrr::map_dfr(tsv_files, read_tsv, show_col_types = FALSE)
+  # Read in canonical year-agnostic LAD template once
+  lad_template <- read_tsv(
+    file.path("data", "lad_template.tsv"),
+    col_types = cols(
+      month = col_integer(),
+      day = col_integer(),
+      run = col_character(),
+      brood_year_offset = col_integer(),
+      max = col_double(),
+      min = col_double()
+    ),
+    show_col_types = FALSE
+  )
 
   # Reactively load PBT summary for the selected water year
   pbt_summary <- reactive({
@@ -226,6 +264,16 @@ server <- function(input, output, session) {
   raw_year_data <- reactive({
     req(input$water_year)
     load_cfs_data(input$water_year, pbt_summary())
+  })
+
+  # Generate LAD ribbon data covering the entire selected water year (Oct 1 to Sep 30)
+  lad_long <- reactive({
+    req(input$water_year, raw_year_data())
+    wy_bounds <- get_water_year_bounds(input$water_year)
+    sample_dates <- as.Date(raw_year_data()$SampleDate, tz = "America/Los_Angeles")
+    start_date <- min(c(wy_bounds$start, sample_dates), na.rm = TRUE) - days(3)
+    end_date   <- max(c(wy_bounds$end, sample_dates), na.rm = TRUE) + days(3)
+    generate_lad_data(start_date, end_date, lad_template)
   })
 
   data <- reactive({
@@ -246,7 +294,7 @@ server <- function(input, output, session) {
   })
 
   observe({ # Update selectInput choices when data is loaded
-    req(data())
+    req(data(), input$water_year)
     choices <- c( # Valid and allowable choice column names
       "Genetic_Assignment",
       "Sherlock_Assignment",
@@ -266,18 +314,24 @@ server <- function(input, output, session) {
       sort()
     updateSelectInput(session, "LAD", choices = model_choices, selected = model_choices)
 
+    wy_bounds <- get_water_year_bounds(input$water_year)
+    sample_min <- as.Date(min(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles")
+    sample_max <- as.Date(max(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles")
+    picker_min <- min(wy_bounds$start, sample_min, na.rm = TRUE)
+    picker_max <- max(wy_bounds$end, sample_max, na.rm = TRUE)
+
     updateDateRangeInput(
       session,
       "date_range",
-      start = as.Date(min(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles"),
-      end = as.Date(max(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles"),
-      min = as.Date(min(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles"),
-      max = as.Date(max(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles")
+      start = sample_min,
+      end = sample_max,
+      min = picker_min,
+      max = picker_max
     )
   })
 
   p <- reactive({
-    req(data(), input$color, input$date_range[1], input$date_range[2])
+    req(data(), lad_long(), input$color, input$date_range[1], input$date_range[2])
     filtered_data <- data() %>%
       filter(
         LAD.Class %in% input$LAD
@@ -289,34 +343,13 @@ server <- function(input, output, session) {
         )
     }
     prerun_color_palette <- RColorBrewer::brewer.pal(9, "Set1")
-    run_color_mapping <- c(
+    base_run_color_mapping <- c(
       "Fall / Late Fall" = prerun_color_palette[5],
       "Fall or Late fall" = prerun_color_palette[5],
       "Fall" = "#c9b428",
       "Late Fall" = prerun_color_palette[7],
       "Spring" = prerun_color_palette[3],
       "Winter" = prerun_color_palette[2],
-      "f22" = prerun_color_palette[6],
-      "f23" = prerun_color_palette[6],
-      "f24" = prerun_color_palette[6],
-      "f25" = prerun_color_palette[6],
-      "f26" = prerun_color_palette[6],
-      "f27" = prerun_color_palette[6],
-      "lf23" = prerun_color_palette[7],
-      "s23" = prerun_color_palette[3],
-      "s24" = prerun_color_palette[3],
-      "s25" = prerun_color_palette[3],
-      "s26" = prerun_color_palette[3],
-      "s27" = prerun_color_palette[3],
-      "w23" = prerun_color_palette[2],
-      "w24" = prerun_color_palette[2],
-      "w25" = prerun_color_palette[2],
-      "w26" = prerun_color_palette[2],
-      "w27" = prerun_color_palette[2],
-      "lf24" = prerun_color_palette[7],
-      "lf25" = prerun_color_palette[7],
-      "lf26" = prerun_color_palette[7],
-      "lf27" = prerun_color_palette[7],
       "Non-Winter" = prerun_color_palette[9],
       "Early" = prerun_color_palette[2],
       "Early-Spring" = prerun_color_palette[3],
@@ -363,7 +396,19 @@ server <- function(input, output, session) {
       "Spring to Fall" = prerun_color_palette[7],
       "Not RoSA-informed" = "#868686"
     )
-    lad_long_filtered <- lad_long %>%
+
+    cohort_prefix_colors <- c(
+      "f"  = prerun_color_palette[6],
+      "lf" = prerun_color_palette[7],
+      "s"  = prerun_color_palette[3],
+      "w"  = prerun_color_palette[2]
+    )
+    all_cohorts <- unique(lad_long()$cohort)
+    cohort_runs <- sub("\\d+$", "", all_cohorts)
+    dynamic_cohort_colors <- setNames(unname(cohort_prefix_colors[cohort_runs]), all_cohorts)
+    run_color_mapping <- c(base_run_color_mapping, dynamic_cohort_colors)
+
+    lad_long_filtered <- lad_long() %>%
       filter(
         date >= input$date_range[1] - days(1),
         date <= input$date_range[2] + days(1) # Filter based on date range
