@@ -208,6 +208,83 @@ load_cfs_data <- function(water_year, pbt_summary, data_dir = "data") {
 
 available_water_years <- get_available_water_years("data")
 
+# Read in canonical year-agnostic LAD template once at app startup
+lad_template <- read_tsv(
+  file.path("data", "lad_template.tsv"),
+  col_types = cols(
+    month = col_integer(),
+    day = col_integer(),
+    run = col_character(),
+    brood_year_offset = col_integer(),
+    max = col_double(),
+    min = col_double()
+  ),
+  show_col_types = FALSE
+)
+
+# Static color mappings initialized once at app startup
+prerun_color_palette <- RColorBrewer::brewer.pal(9, "Set1")
+base_run_color_mapping <- c(
+  "Fall / Late Fall" = prerun_color_palette[5],
+  "Fall or Late fall" = prerun_color_palette[5],
+  "Fall" = "#c9b428",
+  "Late Fall" = prerun_color_palette[7],
+  "Spring" = prerun_color_palette[3],
+  "Winter" = prerun_color_palette[2],
+  "Non-Winter" = prerun_color_palette[9],
+  "Early" = prerun_color_palette[2],
+  "Early-Spring" = prerun_color_palette[3],
+  "Early-Winter" = prerun_color_palette[2],
+  "Sp-Win hybrid" = "#00dba4",
+  "Intermediate" = "#c9b428",
+  "Late" = prerun_color_palette[5],
+  "Latefall" = prerun_color_palette[7],
+  "Late fall" = prerun_color_palette[7],
+  "female" = prerun_color_palette[1],
+  "male" = prerun_color_palette[2],
+  "TRUE" = prerun_color_palette[1],
+  "FALSE" = prerun_color_palette[9],
+  "CVP" = prerun_color_palette[2],
+  "SWP" = prerun_color_palette[1],
+  "Early / Early" = prerun_color_palette[2],
+  "Early-returning" = prerun_color_palette[2],
+  "Late / Late" = prerun_color_palette[5],
+  "Early / Late" = "#c9b428",
+  "Heterozygous" = "#c9b428",
+  "NA" = prerun_color_palette[9],
+  "Not Screened" = "#d1d1d1",
+  "Other" = "#d1d1d1",
+  "Unknown" = "#868686",
+  "O. mykiss" = "#d1d1d1",
+  "Steelhead" = "#d1d1d1",
+  "Likely heterozygote" = "red",
+  "Pending QA/QC" = "yellow",
+  "Pending" = "yellow",
+  "No Consensus" = "yellow",
+  "No Tributary Assigned" = prerun_color_palette[9],
+  "Butte" = prerun_color_palette[1],
+  "Butte Creek Spring" = prerun_color_palette[1],
+  "Deer" = prerun_color_palette[2],
+  "Mill" = prerun_color_palette[3],
+  "Feather River Spring" = prerun_color_palette[4],
+  "Feather River" = prerun_color_palette[4],
+  "Feather River Lineage" = prerun_color_palette[4],
+  "Ambiguous" = "yellow",
+  "Referred to GTseq: No SHERLOCK Detection" = "purple",
+  "Referred to GTseq: heterozygote" = "purple",
+  "Mill/Deer Creek Spring" = prerun_color_palette[3],
+  "Fall to Spring" = prerun_color_palette[3],
+  "Spring to Fall" = prerun_color_palette[7],
+  "Not RoSA-informed" = "#868686"
+)
+
+cohort_prefix_colors <- c(
+  "f"  = prerun_color_palette[6],
+  "lf" = prerun_color_palette[7],
+  "s"  = prerun_color_palette[3],
+  "w"  = prerun_color_palette[2]
+)
+
 # Define UI for application
 ui <- fluidPage(
   titlePanel("Chinook Salvage Genetic Data Viewer"),
@@ -240,33 +317,14 @@ ui <- fluidPage(
 
 # Define server logic
 server <- function(input, output, session) {
-  # Read in canonical year-agnostic LAD template once
-  lad_template <- read_tsv(
-    file.path("data", "lad_template.tsv"),
-    col_types = cols(
-      month = col_integer(),
-      day = col_integer(),
-      run = col_character(),
-      brood_year_offset = col_integer(),
-      max = col_double(),
-      min = col_double()
-    ),
-    show_col_types = FALSE
-  )
-
-  # Reactively load PBT summary for the selected water year
-  pbt_summary <- reactive({
-    req(input$water_year)
-    load_pbt_summary(input$water_year)
-  })
-
-  # Reactively load CFS dataset for the selected water year
+  # Reactively load and join PBT + CFS dataset for the selected water year (cached across sessions)
   raw_year_data <- reactive({
     req(input$water_year)
-    load_cfs_data(input$water_year, pbt_summary())
-  })
+    pbt <- load_pbt_summary(input$water_year)
+    load_cfs_data(input$water_year, pbt)
+  }) %>% bindCache(input$water_year)
 
-  # Generate LAD ribbon data covering the entire selected water year (Oct 1 to Sep 30)
+  # Generate LAD ribbon data covering the entire selected water year (cached across sessions)
   lad_long <- reactive({
     req(input$water_year, raw_year_data())
     wy_bounds <- get_water_year_bounds(input$water_year)
@@ -274,14 +332,18 @@ server <- function(input, output, session) {
     start_date <- min(c(wy_bounds$start, sample_dates), na.rm = TRUE) - days(3)
     end_date   <- max(c(wy_bounds$end, sample_dates), na.rm = TRUE) + days(3)
     generate_lad_data(start_date, end_date, lad_template)
-  })
+  }) %>% bindCache(input$water_year)
+
+  # Debounce ID text input so typing doesn't rebuild the plot on every keystroke
+  selected_ids_debounced <- reactive(trimws(input$selectIDs)) %>% debounce(400)
 
   data <- reactive({
     df <- raw_year_data()
-    if (length(input$selectIDs) < 1 || !nzchar(trimws(input$selectIDs))) {
+    ids_text <- selected_ids_debounced()
+    if (length(ids_text) < 1 || !nzchar(ids_text)) {
       return(df)
     } else {
-      parsed_IDs <- input$selectIDs %>%
+      parsed_IDs <- ids_text %>%
         str_split_1(",\\s?")
       filtered_df <- df %>%
         filter(ID %in% parsed_IDs)
@@ -293,8 +355,9 @@ server <- function(input, output, session) {
     }
   })
 
-  observe({ # Update selectInput choices when data is loaded
-    req(data(), input$water_year)
+  # Update selectInput and dateRangeInput choices only when water year data changes
+  observeEvent(raw_year_data(), {
+    df <- raw_year_data()
     choices <- c( # Valid and allowable choice column names
       "Genetic_Assignment",
       "Sherlock_Assignment",
@@ -303,23 +366,25 @@ server <- function(input, output, session) {
       "rosa_informed",
       "PBT"
     )
-    valid_choices <- choices[choices %in% names(data())]
+    valid_choices <- choices[choices %in% names(df)]
     current_color <- isolate(input$color)
     selected_color <- if (!is.null(current_color) && current_color %in% valid_choices) current_color else valid_choices[1]
-    updateSelectInput(session, "color", choices = valid_choices, selected = selected_color)
 
-    model_choices <- data() %>%
+    model_choices <- df %>%
       pull(LAD.Class) %>%
       unique() %>%
       sort()
-    updateSelectInput(session, "LAD", choices = model_choices, selected = model_choices)
 
     wy_bounds <- get_water_year_bounds(input$water_year)
-    sample_min <- as.Date(min(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles")
-    sample_max <- as.Date(max(data()$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles")
+    sample_min <- as.Date(min(df$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles")
+    sample_max <- as.Date(max(df$SampleDate, na.rm = TRUE), tz = "America/Los_Angeles")
     picker_min <- min(wy_bounds$start, sample_min, na.rm = TRUE)
     picker_max <- max(wy_bounds$end, sample_max, na.rm = TRUE)
 
+    # Freeze date_range so p() waits for the updated dates rather than rendering twice
+    freezeReactiveValue(input, "date_range")
+    updateSelectInput(session, "color", choices = valid_choices, selected = selected_color)
+    updateSelectInput(session, "LAD", choices = model_choices, selected = model_choices)
     updateDateRangeInput(
       session,
       "date_range",
@@ -342,67 +407,7 @@ server <- function(input, output, session) {
           !is.na(Spring_tributary)
         )
     }
-    prerun_color_palette <- RColorBrewer::brewer.pal(9, "Set1")
-    base_run_color_mapping <- c(
-      "Fall / Late Fall" = prerun_color_palette[5],
-      "Fall or Late fall" = prerun_color_palette[5],
-      "Fall" = "#c9b428",
-      "Late Fall" = prerun_color_palette[7],
-      "Spring" = prerun_color_palette[3],
-      "Winter" = prerun_color_palette[2],
-      "Non-Winter" = prerun_color_palette[9],
-      "Early" = prerun_color_palette[2],
-      "Early-Spring" = prerun_color_palette[3],
-      "Early-Winter" = prerun_color_palette[2],
-      "Sp-Win hybrid" = "#00dba4",
-      "Intermediate" = "#c9b428",
-      "Late" = prerun_color_palette[5],
-      "Latefall" = prerun_color_palette[7],
-      "Late fall" = prerun_color_palette[7],
-      "female" = prerun_color_palette[1],
-      "male" = prerun_color_palette[2],
-      "TRUE" = prerun_color_palette[1],
-      "FALSE" = prerun_color_palette[9],
-      "CVP" = prerun_color_palette[2],
-      "SWP" = prerun_color_palette[1],
-      "Early / Early" = prerun_color_palette[2],
-      "Early-returning" = prerun_color_palette[2],
-      "Late / Late" = prerun_color_palette[5],
-      "Early / Late" = "#c9b428",
-      "Heterozygous" = "#c9b428",
-      "NA" = prerun_color_palette[9],
-      "Not Screened" = "#d1d1d1",
-      "Other" = "#d1d1d1",
-      "Unknown" = "#868686",
-      "O. mykiss" = "#d1d1d1",
-      "Steelhead" = "#d1d1d1",
-      "Likely heterozygote" = "red",
-      "Pending QA/QC" = "yellow",
-      "Pending" = "yellow",
-      "No Consensus" = "yellow",
-      "No Tributary Assigned" = prerun_color_palette[9],
-      "Butte" = prerun_color_palette[1],
-      "Butte Creek Spring" = prerun_color_palette[1],
-      "Deer" = prerun_color_palette[2],
-      "Mill" = prerun_color_palette[3],
-      "Feather River Spring" = prerun_color_palette[4],
-      "Feather River" = prerun_color_palette[4],
-      "Feather River Lineage" = prerun_color_palette[4],
-      "Ambiguous" = "yellow",
-      "Referred to GTseq: No SHERLOCK Detection" = "purple",
-      "Referred to GTseq: heterozygote" = "purple",
-      "Mill/Deer Creek Spring" = prerun_color_palette[3],
-      "Fall to Spring" = prerun_color_palette[3],
-      "Spring to Fall" = prerun_color_palette[7],
-      "Not RoSA-informed" = "#868686"
-    )
 
-    cohort_prefix_colors <- c(
-      "f"  = prerun_color_palette[6],
-      "lf" = prerun_color_palette[7],
-      "s"  = prerun_color_palette[3],
-      "w"  = prerun_color_palette[2]
-    )
     all_cohorts <- unique(lad_long()$cohort)
     cohort_runs <- sub("\\d+$", "", all_cohorts)
     dynamic_cohort_colors <- setNames(unname(cohort_prefix_colors[cohort_runs]), all_cohorts)
@@ -414,7 +419,7 @@ server <- function(input, output, session) {
         date <= input$date_range[2] + days(1) # Filter based on date range
       )
 
-    p <- plot_ly(colors = run_color_mapping) %>%
+    plot_ly(colors = run_color_mapping) %>%
       add_ribbons( # Add ribbons for min/max values overlaid on top of fork length
         data = lad_long_filtered,
         x = ~date,
@@ -444,9 +449,13 @@ server <- function(input, output, session) {
         yaxis = list(title = "Fork Length"),
         showlegend = TRUE
       )
-
-    p
-  })
+  }) %>% bindCache(
+    input$water_year,
+    input$color,
+    input$LAD,
+    input$date_range,
+    selected_ids_debounced()
+  )
 
   output$plot <- renderPlotly({
     p()
